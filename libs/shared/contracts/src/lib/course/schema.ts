@@ -35,6 +35,9 @@ export const getAllVideosOfCourseSchema = z.array(
     thumbnailUrl: z.string(),
     created_at: z.date(),
     updatedAt: z.date(),
+    videoRenditions: z
+      .array(z.object({ quality: z.string(), url: z.string() }))
+      .optional(),
   })
 );
 

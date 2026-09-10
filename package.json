@@ -43,7 +43,8 @@
     "migrate:firebase-images": "tsx apps/backend/src/scripts/migrateFirebaseImagesToR2.ts",
     "migrate:firebase-images:dry-run": "tsx apps/backend/src/scripts/migrateFirebaseImagesToR2.ts --dry-run",
     "script:inspect-course-videos": "tsx apps/backend/src/scripts/inspectCourseVideos.ts",
-    "script:compress-course-videos": "tsx apps/backend/src/scripts/compressCourseVideos.ts"
+    "script:compress-course-videos": "tsx apps/backend/src/scripts/compressCourseVideos.ts",
+    "script:generate-video-renditions": "tsx apps/backend/src/scripts/generateVideoRenditions.ts"
   },
   "private": true,
   "devDependencies": {

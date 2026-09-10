@@ -63,6 +63,7 @@ const getVideosOfCourse: AppRouteImplementationOrOptions<
         created_at: video.createdAt,
         updatedAt: video.updatedAt,
         name: video.name,
+        videoRenditions: video.videoRenditions || [],
       })),
     };
   } catch (error) {

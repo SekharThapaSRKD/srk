@@ -3,7 +3,8 @@
 import { Button } from "@nextui-org/button";
 import { Chip } from "@nextui-org/chip";
 import { Card, CardHeader, CardBody } from "@nextui-org/card";
-import { PlayCircle, RotateCw } from "lucide-react";
+import { Select, SelectItem } from "@nextui-org/select";
+import { PlayCircle, RotateCw, Wifi, WifiOff } from "lucide-react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { BreadcrumbItem, Breadcrumbs, Spinner } from "@nextui-org/react";
 import clsx from "clsx";
@@ -13,8 +14,21 @@ import {
   getCourseVideoByCourseId,
 } from "../../../lib/apiClient";
 import { TCourse, TCourseVideo } from "../../../lib/types/entities";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getUniversityAssetUrl } from "../../../lib/cdn";
+import { useNetworkStatus } from "../../../hooks/useNetworkStatus";
+
+// Best -> worst. "original" is always the video's own videoUrl (native
+// resolution); everything else comes from that video's videoRenditions,
+// so only options that actually exist for a given video are ever shown.
+const QUALITY_ORDER = ["original", "1080p", "720p", "480p", "360p"];
+const QUALITY_LABELS: Record<string, string> = {
+  original: "Original (best quality)",
+  "1080p": "1080p",
+  "720p": "720p (lower data use)",
+  "480p": "480p (lower data use)",
+  "360p": "360p (lowest data use)",
+};
 
 export default function CoursePlayer() {
   const { courseId } = useParams();
@@ -23,6 +37,11 @@ export default function CoursePlayer() {
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [hasVideoError, setHasVideoError] = useState(false);
   const [videoRetryKey, setVideoRetryKey] = useState(0);
+  const [selectedQuality, setSelectedQuality] = useState("original");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const wasPlayingRef = useRef(false);
+  const networkStatus = useNetworkStatus();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [hasWatched] = useState(false);
   const { data: courseDetails, isLoading: isCourseLoading } = useQuery<
@@ -68,10 +87,64 @@ export default function CoursePlayer() {
     }
   }, [chaptersData]);
 
+  const availableQualities = useMemo(() => {
+    const present = new Set([
+      "original",
+      ...((currentVideo?.videoRenditions || []).map((r) => r.quality)),
+    ]);
+    return QUALITY_ORDER.filter((q) => present.has(q));
+  }, [currentVideo]);
+
+  // Falls back to "original" if the previously-selected quality doesn't
+  // exist for this particular video (e.g. renditions still being generated
+  // for some courses) - derived at render time rather than synced via a
+  // separate effect, so there's nothing to get out of sync.
+  const effectiveQuality = availableQualities.includes(selectedQuality)
+    ? selectedQuality
+    : "original";
+
+  const activeVideoUrl =
+    effectiveQuality === "original"
+      ? currentVideo?.videoUrl
+      : currentVideo?.videoRenditions?.find(
+          (r) => r.quality === effectiveQuality
+        )?.url;
+
   useEffect(() => {
     setIsVideoLoading(true);
     setHasVideoError(false);
-  }, [currentVideo?._id, videoRetryKey]);
+  }, [currentVideo?._id, videoRetryKey, effectiveQuality]);
+
+  const recommendedQuality = useMemo(() => {
+    const lowerTiers = availableQualities.filter((q) => q !== "original");
+    if (networkStatus.quality === "poor") {
+      return lowerTiers[lowerTiers.length - 1] || "original";
+    }
+    if (networkStatus.quality === "moderate") {
+      return lowerTiers.includes("720p")
+        ? "720p"
+        : lowerTiers[lowerTiers.length - 1] || "original";
+    }
+    return "original";
+  }, [networkStatus.quality, availableQualities]);
+
+  const handleQualityChange = (quality: string) => {
+    if (videoRef.current) {
+      pendingSeekRef.current = videoRef.current.currentTime;
+      wasPlayingRef.current = !videoRef.current.paused;
+    }
+    setSelectedQuality(quality);
+  };
+
+  const handleLoadedMetadata = () => {
+    if (pendingSeekRef.current !== null && videoRef.current) {
+      videoRef.current.currentTime = pendingSeekRef.current;
+      pendingSeekRef.current = null;
+      if (wasPlayingRef.current) {
+        videoRef.current.play().catch(() => undefined);
+      }
+    }
+  };
 
   if (isCourseLoading || isChaptersLoading) {
     return (
@@ -111,7 +184,40 @@ export default function CoursePlayer() {
         className="max-w-md float-end"
         color="primary"
       /> */}
-      <div className="flex gap-x-2 justify-end text-textPrimary mb-2">
+      <div className="flex flex-wrap gap-2 justify-end items-center text-textPrimary mb-2">
+        {networkStatus.supported && (
+          <div className="flex items-center gap-1 text-xs text-default-400">
+            {networkStatus.quality === "poor" ? (
+              <WifiOff className="w-3.5 h-3.5" />
+            ) : (
+              <Wifi className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {networkStatus.effectiveType
+                ? `${networkStatus.effectiveType.toUpperCase()} connection`
+                : "Connection status unknown"}
+              {recommendedQuality !== "original" &&
+                effectiveQuality !== recommendedQuality &&
+                ` · try ${QUALITY_LABELS[recommendedQuality] || recommendedQuality} for smoother playback`}
+            </span>
+          </div>
+        )}
+        {currentVideo && availableQualities.length > 1 && (
+          <Select
+            aria-label="Video quality"
+            size="sm"
+            className="w-48"
+            selectedKeys={[effectiveQuality]}
+            onSelectionChange={(keys) => {
+              const value = Array.from(keys)[0] as string | undefined;
+              if (value) handleQualityChange(value);
+            }}
+          >
+            {availableQualities.map((q) => (
+              <SelectItem key={q}>{QUALITY_LABELS[q] || q}</SelectItem>
+            ))}
+          </Select>
+        )}
         <span className="text-sm">Total Video: {chaptersData?.length}</span>
       </div>
 
@@ -123,12 +229,14 @@ export default function CoursePlayer() {
         >
           {currentVideo ? (
             <video
+              ref={videoRef}
               key={`${currentVideo._id}-${videoRetryKey}`}
-              src={getUniversityAssetUrl(currentVideo.videoUrl)}
+              src={getUniversityAssetUrl(activeVideoUrl)}
               className="absolute top-0 left-0 w-full h-full"
               controlsList="nodownload"
               controls
               onLoadedData={() => setIsVideoLoading(false)}
+              onLoadedMetadata={handleLoadedMetadata}
               onWaiting={() => setIsVideoLoading(true)}
               onPlaying={() => setIsVideoLoading(false)}
               onError={() => {

@@ -18,6 +18,20 @@ const courseVideoSchema = new mongoose.Schema(
     originalVideoUrl: {
       type: String,
     },
+    // Lower-quality alternates (e.g. "720p", "360p") for playback on
+    // unstable connections. An array rather than fixed fields (videoUrl720p,
+    // videoUrl360p, ...) so new quality levels can be added later without a
+    // schema change - just push another { quality, url } entry.
+    videoRenditions: {
+      type: [
+        {
+          quality: { type: String, required: true },
+          url: { type: String, required: true },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
     thumbnailUrl: {
       type: String,
     },

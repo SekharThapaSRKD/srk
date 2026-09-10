@@ -88,6 +88,10 @@ export type TCourse = {
   createdAt: Date;
   updatedAt: Date;
 };
+export type TVideoRendition = {
+  quality: string;
+  url: string;
+};
 export type TCourseVideo = {
   _id: string;
   name: string;
@@ -97,6 +101,7 @@ export type TCourseVideo = {
   thumbnailUrl: string;
   createdAt: Date;
   updatedAt: Date;
+  videoRenditions?: TVideoRendition[];
 };
 
 export type TAdminSrkBank = {

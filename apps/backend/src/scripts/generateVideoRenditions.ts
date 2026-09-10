@@ -19,48 +19,51 @@ import { CourseModel } from '../model/courseModel';
 const execFileAsync = promisify(execFile);
 
 /**
- * Compresses existing course videos (raw uploads, some as large as 1.4GB /
- * QuickTime .mov) down to roughly half their original file size, and
- * uploads the result to R2 under a NEW key. The original object is never
- * touched or deleted (kept in `originalVideoUrl`), so this is safe to
- * re-run and easy to walk back.
+ * Generates a lower-quality rendition (e.g. 720p, 360p) of every course
+ * video's CURRENT videoUrl (the already-optimized, native-resolution
+ * version - re-encoding from that instead of the raw original is much
+ * faster and the extra generation loss is negligible at these target
+ * resolutions/bitrates) and appends it to that video's `videoRenditions`
+ * array. Existing renditions and the original/optimized files are never
+ * touched - this is purely additive.
  *
- * Resolution is left untouched (no downscaling) - some course videos have
- * small on-screen content (tiny UI text, code) that becomes unreadable once
- * downscaled to 1080p, so the size reduction comes entirely from bitrate,
- * targeted at ~50% of the original file's average bitrate (two-pass, since
- * single-pass badly undershoots on static/slide-heavy content).
+ * To add a new quality level later (e.g. "480p"), just add an entry to
+ * QUALITY_PRESETS below and run with --quality=480p. No schema change,
+ * no migration - each video just gets one more { quality, url } entry.
  *
- * RESUMABLE: a video is only ever marked done in the DB (videoUrl swapped
- * to the optimized key) after its upload succeeds. If this script is
- * killed (network drop, machine sleep/shutdown, session restart), just
- * re-run the exact same command - already-applied videos are skipped
- * (their videoUrl already ends in "-optimized") and everything else picks
- * up where it left off. No manual bookkeeping needed.
- *
- * Progress is logged to logs/course-video-compression/ (both a
- * timestamped file per run and latest.log, which always has the current
- * run's tail) so progress can be watched with:
- *   tail -f logs/course-video-compression/latest.log
+ * RESUMABLE the same way as compressCourseVideos.ts: a video is only
+ * marked done (an entry pushed to videoRenditions) after its upload
+ * succeeds, so re-running the same command after any interruption picks
+ * up exactly where it left off.
  *
  * Usage:
  *   Test one video, no DB change:
- *     npm run script:compress-course-videos -- --videoId=<id>
+ *     npm run script:generate-video-renditions -- --quality=720p --videoId=<id>
  *
  *   Test one video and update its DB record on success:
- *     npm run script:compress-course-videos -- --videoId=<id> --apply
+ *     npm run script:generate-video-renditions -- --quality=720p --videoId=<id> --apply
  *
- *   Process every course, grouped and logged per course, updating DB
- *   records as it goes:
- *     npm run script:compress-course-videos -- --all --apply
+ *   Process every course, grouped and logged per course:
+ *     npm run script:generate-video-renditions -- --quality=720p --all --apply
  *
- *   Same, but skip specific courses (comma-separated course _ids):
- *     npm run script:compress-course-videos -- --all --apply --excludeCourses=<id1>,<id2>
- *
- *   Process every video WITHOUT touching the DB (just generates the
- *   optimized files in R2 for review first):
- *     npm run script:compress-course-videos -- --all
+ *   Later, add another quality level the same way:
+ *     npm run script:generate-video-renditions -- --quality=360p --all --apply
  */
+
+// Bitrates are deliberately low - the whole point of these renditions is
+// small file size for unstable connections, not matching a "good quality"
+// 720p. They must stay comfortably below the existing optimized videoUrl's
+// own bitrate (~1000-1500kbps at 1080p/4K, verified per-video), or a
+// "720p" rendition ends up no smaller than the 1080p source - defeating
+// the purpose (verified: 1500k produced a LARGER file than a 22.4MB 1080p
+// source before this was lowered).
+const QUALITY_PRESETS: Record<
+  string,
+  { maxWidth: number; videoBitrateKbps: number; audioBitrateKbps: number }
+> = {
+  '720p': { maxWidth: 1280, videoBitrateKbps: 800, audioBitrateKbps: 96 },
+  '360p': { maxWidth: 640, videoBitrateKbps: 300, audioBitrateKbps: 64 },
+};
 
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '';
@@ -69,26 +72,19 @@ const R2_BUCKET = process.env.R2_BUCKET || '';
 const CDN_BASE_URL = process.env.CDN_BASE_URL || '';
 const DATABASE_URL = process.env.DATABASE_URL || '';
 
-const OPTIMIZED_SUFFIX = '-optimized';
-const AUDIO_BITRATE_BPS = 128_000;
-const MIN_VIDEO_BITRATE_BPS = 400_000;
 const NETWORK_RETRIES = 3;
 const NETWORK_RETRY_DELAY_MS = 5_000;
 
 // ---------------------------------------------------------------------------
-// Logging: every line goes to the console, a timestamped file for this run,
-// and latest.log (always the current/most recent run) for easy `tail -f`.
+// Logging: console + a timestamped file per run + latest.log for `tail -f`.
 // ---------------------------------------------------------------------------
-const LOG_DIR = path.join(process.cwd(), 'logs', 'course-video-compression');
+const LOG_DIR = path.join(process.cwd(), 'logs', 'video-renditions');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const runTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const runLogPath = path.join(LOG_DIR, `run-${runTimestamp}.log`);
 const latestLogPath = path.join(LOG_DIR, 'latest.log');
 fs.writeFileSync(latestLogPath, '');
 
-// Synchronous writes on purpose: an async WriteStream can still have
-// buffered data in flight when process.exit() fires, silently dropping the
-// last few lines right at completion/crash - exactly when they matter most.
 function log(msg: string) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
@@ -104,10 +100,6 @@ const s3Client = new S3Client({
     secretAccessKey: R2_SECRET_ACCESS_KEY,
   },
   forcePathStyle: true,
-  // Without this, a connection broken by machine sleep/network drop just
-  // hangs forever instead of erroring - which silently stalls the whole
-  // batch (a real ~2 hour hang was observed after the laptop was closed
-  // mid-upload). These bound the worst case so withRetry can actually run.
   requestHandler: new NodeHttpHandler({
     connectionTimeout: 15_000,
     requestTimeout: 15 * 60_000,
@@ -149,13 +141,13 @@ function extractR2Key(videoUrl: string): string {
   return videoUrl.replace(/^\/+/, '');
 }
 
-function optimizedKeyFor(originalKey: string): string {
-  const dir = path.posix.dirname(originalKey);
+function renditionKeyFor(sourceKey: string, quality: string): string {
+  const dir = path.posix.dirname(sourceKey);
   const base = path.posix.basename(
-    originalKey,
-    path.posix.extname(originalKey)
+    sourceKey,
+    path.posix.extname(sourceKey)
   );
-  return `${dir}/${base}${OPTIMIZED_SUFFIX}.mp4`;
+  return `${dir}/${base}-${quality}.mp4`;
 }
 
 const STREAM_IDLE_TIMEOUT_MS = 60_000;
@@ -169,9 +161,11 @@ async function downloadToFile(key: string, destPath: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const writeStream = fs.createWriteStream(destPath);
       // The initial GetObjectCommand response is bounded by requestTimeout,
-      // but a connection that goes idle mid-stream (e.g. network drop/sleep
-      // on a half-open socket) can hang indefinitely with no error - this
-      // independently watches for data and aborts if none arrives.
+      // but once the body starts streaming, a connection that goes idle
+      // (e.g. after a network drop/sleep, on a half-open socket) can hang
+      // indefinitely with no error - verified: a real download stalled at
+      // 30MB for 5+ hours with no timeout ever firing. This independently
+      // watches for data and aborts if none arrives for a while.
       let idleTimer: NodeJS.Timeout;
       const resetIdleTimer = () => {
         clearTimeout(idleTimer);
@@ -218,29 +212,32 @@ async function getDurationSeconds(inputPath: string): Promise<number> {
   return duration;
 }
 
-// Single-pass -b:v badly undershoots the target on simple/static
-// screen-recording content (verified: landed at ~35% of the requested
-// bitrate on a real test file). Two-pass reliably hits the target size.
-async function compressVideo(
+const MIN_VIDEO_BITRATE_KBPS = 150;
+
+async function transcodeRendition(
   inputPath: string,
   outputPath: string,
-  videoBitrateBps: number,
+  videoBitrateKbps: number,
+  audioBitrateKbps: number,
+  maxWidth: number,
   tmpDir: string
 ): Promise<void> {
-  const videoBitrateK = Math.round(videoBitrateBps / 1000);
   const passLogPrefix = path.join(tmpDir, 'ffmpeg2pass');
   const nullOutput = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const scaleFilter = `scale='min(${maxWidth},iw)':'-2'`;
 
   await execFileAsync('ffmpeg', [
     '-y',
     '-i',
     inputPath,
+    '-vf',
+    scaleFilter,
     '-c:v',
     'libx264',
     '-preset',
     'fast',
     '-b:v',
-    `${videoBitrateK}k`,
+    `${videoBitrateKbps}k`,
     '-pass',
     '1',
     '-passlogfile',
@@ -255,12 +252,14 @@ async function compressVideo(
     '-y',
     '-i',
     inputPath,
+    '-vf',
+    scaleFilter,
     '-c:v',
     'libx264',
     '-preset',
     'fast',
     '-b:v',
-    `${videoBitrateK}k`,
+    `${videoBitrateKbps}k`,
     '-pass',
     '2',
     '-passlogfile',
@@ -268,7 +267,7 @@ async function compressVideo(
     '-c:a',
     'aac',
     '-b:a',
-    `${AUDIO_BITRATE_BPS / 1000}k`,
+    `${audioBitrateKbps}k`,
     '-movflags',
     '+faststart',
     outputPath,
@@ -300,20 +299,26 @@ interface Args {
   videoId?: string;
   all: boolean;
   apply: boolean;
+  quality: string;
   excludeCourses: string[];
+  onlyCourse?: string;
 }
 
 function parseArgs(): Args {
   const args = process.argv.slice(2);
   const videoIdArg = args.find((a) => a.startsWith('--videoId='));
+  const qualityArg = args.find((a) => a.startsWith('--quality='));
   const excludeArg = args.find((a) => a.startsWith('--excludeCourses='));
+  const onlyCourseArg = args.find((a) => a.startsWith('--onlyCourse='));
   return {
     videoId: videoIdArg ? videoIdArg.split('=')[1] : undefined,
     all: args.includes('--all'),
     apply: args.includes('--apply'),
+    quality: qualityArg ? qualityArg.split('=')[1] : '',
     excludeCourses: excludeArg
       ? excludeArg.split('=')[1].split(',').map((s) => s.trim()).filter(Boolean)
       : [],
+    onlyCourse: onlyCourseArg ? onlyCourseArg.split('=')[1] : undefined,
   };
 }
 
@@ -321,51 +326,75 @@ interface VideoDoc {
   _id: mongoose.Types.ObjectId;
   name: string;
   videoUrl: string;
+  videoRenditions?: { quality: string; url: string }[];
 }
 
 async function processOne(
   video: VideoDoc,
+  quality: string,
+  preset: { maxWidth: number; videoBitrateKbps: number; audioBitrateKbps: number },
   apply: boolean
-): Promise<{ skipped: boolean; originalSize?: number; newSize?: number }> {
-  const originalKey = extractR2Key(video.videoUrl);
-
-  if (originalKey.includes(OPTIMIZED_SUFFIX)) {
-    log(`  SKIP (already optimized): ${video.name}`);
+): Promise<{ skipped: boolean }> {
+  const alreadyHas = (video.videoRenditions || []).some(
+    (r) => r.quality === quality
+  );
+  if (alreadyHas) {
+    log(`  SKIP (already has ${quality}): ${video.name}`);
     return { skipped: true };
   }
 
-  const destKey = optimizedKeyFor(originalKey);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'srk-video-'));
-  const inputExt = path.posix.extname(originalKey) || '.mp4';
+  const sourceKey = extractR2Key(video.videoUrl);
+  const destKey = renditionKeyFor(sourceKey, quality);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'srk-rendition-'));
+  const inputExt = path.posix.extname(sourceKey) || '.mp4';
   const inputPath = path.join(tmpDir, `in${inputExt}`);
   const outputPath = path.join(tmpDir, 'out.mp4');
 
   try {
-    log(`  --- ${video.name} (${video._id}) ---`);
-    log(`  Downloading: ${originalKey}`);
-    await downloadToFile(originalKey, inputPath);
-    const originalSize = fs.statSync(inputPath).size;
-    log(`  Original size: ${(originalSize / 1024 / 1024).toFixed(1)} MB`);
+    log(`  --- ${video.name} (${video._id}) -> ${quality} ---`);
+    log(`  Downloading source: ${sourceKey}`);
+    await downloadToFile(sourceKey, inputPath);
+    const sourceSize = fs.statSync(inputPath).size;
+    log(`  Source size: ${(sourceSize / 1024 / 1024).toFixed(1)} MB`);
 
+    // Cap the target well below the source's OWN bitrate - a fixed preset
+    // bitrate can exceed what a low-motion/already-optimized source
+    // actually uses, producing a "rendition" that's bigger than the
+    // source with no quality benefit (verified: happened twice with a
+    // flat 800k target before this per-video cap was added).
     const durationSeconds = await getDurationSeconds(inputPath);
-    const targetTotalBitrateBps = (originalSize * 8) / durationSeconds / 2;
-    const videoBitrateBps = Math.max(
-      targetTotalBitrateBps - AUDIO_BITRATE_BPS,
-      MIN_VIDEO_BITRATE_BPS
+    const sourceBitrateKbps = (sourceSize * 8) / durationSeconds / 1000;
+    const videoBitrateKbps = Math.max(
+      Math.min(preset.videoBitrateKbps, sourceBitrateKbps * 0.6),
+      MIN_VIDEO_BITRATE_KBPS
     );
     log(
-      `  Duration: ${durationSeconds.toFixed(0)}s, target video bitrate: ${(
-        videoBitrateBps / 1000
-      ).toFixed(0)} kbps (native resolution kept)`
+      `  Source bitrate: ${sourceBitrateKbps.toFixed(0)} kbps -> target: ${videoBitrateKbps.toFixed(
+        0
+      )} kbps video (preset ceiling ${preset.videoBitrateKbps}k)`
     );
 
-    log('  Compressing with ffmpeg (two-pass)...');
-    await compressVideo(inputPath, outputPath, videoBitrateBps, tmpDir);
-    const newSize = fs.statSync(outputPath).size;
-    const reduction = (100 * (1 - newSize / originalSize)).toFixed(0);
-    log(
-      `  Compressed size: ${(newSize / 1024 / 1024).toFixed(1)} MB (-${reduction}%)`
+    log(`  Transcoding to ${quality} (two-pass, max width ${preset.maxWidth})...`);
+    await transcodeRendition(
+      inputPath,
+      outputPath,
+      videoBitrateKbps,
+      preset.audioBitrateKbps,
+      preset.maxWidth,
+      tmpDir
     );
+    const newSize = fs.statSync(outputPath).size;
+    log(`  Rendition size: ${(newSize / 1024 / 1024).toFixed(1)} MB`);
+
+    if (newSize >= sourceSize) {
+      log(
+        `  WARNING: rendition (${(newSize / 1024 / 1024).toFixed(1)} MB) is not smaller than source (${(
+          sourceSize /
+          1024 /
+          1024
+        ).toFixed(1)} MB) - uploading anyway, but this defeats the purpose. Investigate.`
+      );
+    }
 
     log(`  Uploading: ${destKey}`);
     await uploadFile(destKey, outputPath);
@@ -374,16 +403,14 @@ async function processOne(
     if (apply) {
       await CourseVideoModel.updateOne(
         { _id: video._id },
-        { $set: { videoUrl: destKey, originalVideoUrl: originalKey } }
+        { $push: { videoRenditions: { quality, url: destKey } } }
       );
-      log(
-        `  DB updated: videoUrl -> optimized, originalVideoUrl -> ${originalKey}`
-      );
+      log(`  DB updated: videoRenditions += { quality: "${quality}", url: "${destKey}" }`);
     } else {
       log('  DB NOT updated (pass --apply once you have confirmed playback).');
     }
 
-    return { skipped: false, originalSize, newSize };
+    return { skipped: false };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -391,30 +418,19 @@ async function processOne(
 
 async function processVideoList(
   videos: VideoDoc[],
+  quality: string,
+  preset: { maxWidth: number; videoBitrateKbps: number; audioBitrateKbps: number },
   apply: boolean
-): Promise<{
-  processed: number;
-  skipped: number;
-  failed: number;
-  totalOriginal: number;
-  totalNew: number;
-}> {
+): Promise<{ processed: number; skipped: number; failed: number }> {
   let processed = 0;
   let skipped = 0;
   let failed = 0;
-  let totalOriginal = 0;
-  let totalNew = 0;
 
   for (const video of videos) {
     try {
-      const result = await processOne(video, apply);
-      if (result.skipped) {
-        skipped++;
-      } else {
-        processed++;
-        totalOriginal += result.originalSize || 0;
-        totalNew += result.newSize || 0;
-      }
+      const result = await processOne(video, quality, preset, apply);
+      if (result.skipped) skipped++;
+      else processed++;
     } catch (error) {
       failed++;
       const stderr = (error as { stderr?: string })?.stderr;
@@ -426,15 +442,28 @@ async function processVideoList(
     }
   }
 
-  return { processed, skipped, failed, totalOriginal, totalNew };
+  return { processed, skipped, failed };
 }
 
 async function main() {
-  const { videoId, all, apply, excludeCourses } = parseArgs();
+  const { videoId, all, apply, quality, excludeCourses, onlyCourse } = parseArgs();
 
-  if (!videoId && !all) {
+  if (!quality) {
     console.error(
-      'Pass either --videoId=<id> (test one video) or --all (process every video).'
+      `Pass --quality=<${Object.keys(QUALITY_PRESETS).join('|')}>`
+    );
+    process.exit(1);
+  }
+  const preset = QUALITY_PRESETS[quality];
+  if (!preset) {
+    console.error(
+      `Unknown quality "${quality}". Known: ${Object.keys(QUALITY_PRESETS).join(', ')}`
+    );
+    process.exit(1);
+  }
+  if (!videoId && !all && !onlyCourse) {
+    console.error(
+      'Pass --videoId=<id> (test one video), --all (process every video), or --onlyCourse=<id>.'
     );
     process.exit(1);
   }
@@ -444,11 +473,11 @@ async function main() {
   }
 
   log(`Log file for this run: ${runLogPath}`);
+  log(`Quality: ${quality} (maxWidth=${preset.maxWidth}, videoBitrate=${preset.videoBitrateKbps}k, audioBitrate=${preset.audioBitrateKbps}k)`);
   log(`Connecting to database (IS_PROD=${process.env.IS_PROD})...`);
   await mongoose.connect(DATABASE_URL);
   log('Connected.');
 
-  // Single-video mode (testing) - unchanged, no course grouping needed.
   if (videoId) {
     const videos = await CourseVideoModel.find({ _id: videoId }).lean();
     if (videos.length === 0) {
@@ -457,21 +486,21 @@ async function main() {
       process.exit(1);
     }
     log(`Processing 1 video. apply=${apply}`);
-    const result = await processVideoList(videos, apply);
+    const result = await processVideoList(videos, quality, preset, apply);
     log('='.repeat(70));
-    log(
-      `Processed: ${result.processed}, Skipped: ${result.skipped}, Failed: ${result.failed}`
-    );
+    log(`Processed: ${result.processed}, Skipped: ${result.skipped}, Failed: ${result.failed}`);
     await mongoose.disconnect();
     process.exit(result.failed > 0 ? 1 : 0);
   }
 
-  // --all mode: grouped per course, logged per course, resumable.
   const courses = await CourseModel.find({}).lean();
-  const coursesToProcess = courses.filter(
-    (c) => !excludeCourses.includes(c._id.toString())
-  );
+  const coursesToProcess = onlyCourse
+    ? courses.filter((c) => c._id.toString() === onlyCourse)
+    : courses.filter((c) => !excludeCourses.includes(c._id.toString()));
 
+  if (onlyCourse) {
+    log(`Only processing course: ${coursesToProcess[0]?.title || onlyCourse}`);
+  }
   if (excludeCourses.length > 0) {
     const excludedNames = courses
       .filter((c) => excludeCourses.includes(c._id.toString()))
@@ -484,54 +513,31 @@ async function main() {
   let grandProcessed = 0;
   let grandSkipped = 0;
   let grandFailed = 0;
-  let grandOriginal = 0;
-  let grandNew = 0;
 
   for (let i = 0; i < coursesToProcess.length; i++) {
     const course = coursesToProcess[i];
     const videos = await CourseVideoModel.find({ courseId: course._id }).lean();
     log('');
     log('#'.repeat(70));
-    log(
-      `# COURSE ${i + 1}/${coursesToProcess.length}: ${course.title} (${videos.length} videos)`
-    );
+    log(`# COURSE ${i + 1}/${coursesToProcess.length}: ${course.title} (${videos.length} videos)`);
     log('#'.repeat(70));
 
-    const result = await processVideoList(videos, apply);
+    const result = await processVideoList(videos, quality, preset, apply);
     grandProcessed += result.processed;
     grandSkipped += result.skipped;
     grandFailed += result.failed;
-    grandOriginal += result.totalOriginal;
-    grandNew += result.totalNew;
 
     log(
       `Course done: ${course.title} -> processed=${result.processed}, skipped=${result.skipped}, failed=${result.failed}`
     );
     log(
-      `Running total so far: processed=${grandProcessed}, skipped=${grandSkipped}, failed=${grandFailed}, ${(
-        grandOriginal /
-        1024 /
-        1024 /
-        1024
-      ).toFixed(2)} GB -> ${(grandNew / 1024 / 1024 / 1024).toFixed(2)} GB`
+      `Running total so far: processed=${grandProcessed}, skipped=${grandSkipped}, failed=${grandFailed}`
     );
   }
 
   log('');
   log('='.repeat(70));
-  log(
-    `ALL DONE. Processed: ${grandProcessed}, Skipped: ${grandSkipped}, Failed: ${grandFailed}`
-  );
-  if (grandProcessed > 0) {
-    log(
-      `Total: ${(grandOriginal / 1024 / 1024 / 1024).toFixed(2)} GB -> ${(
-        grandNew /
-        1024 /
-        1024 /
-        1024
-      ).toFixed(2)} GB`
-    );
-  }
+  log(`ALL DONE. Processed: ${grandProcessed}, Skipped: ${grandSkipped}, Failed: ${grandFailed}`);
   log('='.repeat(70));
 
   await mongoose.disconnect();
