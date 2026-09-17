@@ -16,11 +16,15 @@ import {
   useDisclosure,
   ModalContent,
 } from "@nextui-org/modal";
+import { Pencil, Trash } from "lucide-react";
 import { PrimaryButton } from "../../components/ReusableComponents";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  deleteCourseVideoApi,
   getCourseDetailsByIdApi,
   getCourseVideoByCourseId,
+  updateCourseApi,
+  updateCourseVideoApi,
   uploadVideoApi,
 } from "../../lib/apiClient";
 import { TCourse, TCourseVideo } from "../../lib/types/entities";
@@ -50,6 +54,22 @@ function CourseDetail() {
   const { uploadFile } = useSRKFileUpload('university');
   const { show } = useAlert();
   console.log("chapters", chapters);
+
+  const [editingVideo, setEditingVideo] = useState<TCourseVideo | null>(null);
+  const [editingVideoName, setEditingVideoName] = useState("");
+  const [videoToDelete, setVideoToDelete] = useState<TCourseVideo | null>(
+    null
+  );
+  const {
+    isOpen: isEditVideoModalOpen,
+    onOpen: openEditVideoModal,
+    onOpenChange: onEditVideoModalOpenChange,
+  } = useDisclosure();
+  const {
+    isOpen: isDeleteVideoModalOpen,
+    onOpen: openDeleteVideoModal,
+    onOpenChange: onDeleteVideoModalOpenChange,
+  } = useDisclosure();
 
   const { data: course } = useQuery<TCourse | undefined>({
     queryKey: ["courseDetails", id],
@@ -87,6 +107,65 @@ function CourseDetail() {
       show(error.response?.data.message || "Failed to upload video", "error");
     },
   });
+
+  const { mutate: updateCourseMutation, isPending: isSavingCourse } =
+    useMutation({
+      mutationKey: ["updateCourse"],
+      mutationFn: async (data: TCourse) => {
+        if (!course) return;
+        return updateCourseApi(course._id, {
+          title: data.title,
+          description: data.description,
+          image: data.image,
+        });
+      },
+      onSuccess: () => {
+        invalidateQueries({ queryKey: ["courseDetails", id] });
+        show("Course updated successfully", "success");
+      },
+      onError: (error: AxiosError<{ message: string }>) => {
+        show(
+          error.response?.data.message || "Failed to update course",
+          "error"
+        );
+      },
+    });
+
+  const { mutate: updateVideoMutation } = useMutation({
+    mutationKey: ["updateCourseVideo"],
+    mutationFn: async (data: { videoId: string; name: string }) => {
+      return updateCourseVideoApi(data.videoId, data.name);
+    },
+    onSuccess: () => {
+      invalidateQueries({ queryKey: ["videosOfCourse"] });
+      show("Video updated successfully", "success");
+      setEditingVideo(null);
+      setEditingVideoName("");
+    },
+    onError: (error: AxiosError<{ message: string }>) => {
+      show(
+        error.response?.data.message || "Failed to update video",
+        "error"
+      );
+    },
+  });
+
+  const { mutate: deleteVideoMutation } = useMutation({
+    mutationKey: ["deleteCourseVideo"],
+    mutationFn: async (videoId: string) => deleteCourseVideoApi(videoId),
+    onSuccess: () => {
+      invalidateQueries({ queryKey: ["videosOfCourse"] });
+      show("Video deleted successfully", "success");
+      setVideoToDelete(null);
+    },
+    onError: (error: AxiosError<{ message: string }>) => {
+      show(
+        error.response?.data.message || "Failed to delete video",
+        "error"
+      );
+    },
+  });
+
   useEffect(() => {
     if (course) {
       setEditableCourse(course);
@@ -145,15 +224,40 @@ function CourseDetail() {
     }
   };
 
-  const handleEditChange = () => {
-    // setEditableCourse({
-    //   ...editableCourse,
-    //   [e.target.name]: e.target.value,
-    // });
+  const handleEditChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    const { name, value } = e.target;
+    setEditableCourse((prev) => (prev ? { ...prev, [name]: value } : prev));
   };
 
   const handleSave = () => {
-    if (!course) return;
+    if (!editableCourse) return;
+    updateCourseMutation(editableCourse);
+  };
+
+  const handleEditVideoClick = (video: TCourseVideo) => {
+    setEditingVideo(video);
+    setEditingVideoName(video.name);
+    openEditVideoModal();
+  };
+
+  const handleSaveVideoEdit = () => {
+    if (!editingVideo || !editingVideoName.trim()) return;
+    updateVideoMutation({
+      videoId: editingVideo._id,
+      name: editingVideoName.trim(),
+    });
+  };
+
+  const handleDeleteVideoClick = (video: TCourseVideo) => {
+    setVideoToDelete(video);
+    openDeleteVideoModal();
+  };
+
+  const handleConfirmDeleteVideo = () => {
+    if (!videoToDelete) return;
+    deleteVideoMutation(videoToDelete._id);
   };
 
   if (!course) {
@@ -222,8 +326,30 @@ function CourseDetail() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-4 ">
         {courseVideos?.map((video) => (
-          <Card className="">
-            <CardHeader>{video.name}</CardHeader>
+          <Card key={video._id} className="">
+            <CardHeader className="flex justify-between items-center gap-2">
+              <span className="truncate">{video.name}</span>
+              <div className="flex gap-2 shrink-0">
+                <Button
+                  isIconOnly
+                  size="sm"
+                  radius="sm"
+                  className="bg-green-600 text-white"
+                  onPress={() => handleEditVideoClick(video)}
+                >
+                  <Pencil size={16} />
+                </Button>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  radius="sm"
+                  className="bg-red-700 text-white"
+                  onPress={() => handleDeleteVideoClick(video)}
+                >
+                  <Trash size={16} />
+                </Button>
+              </div>
+            </CardHeader>
             <CardBody>
               <video controls className="w-full h-64 object-cover rounded-lg">
                 <source src={getUniversityAssetUrl(video.videoUrl)} type="video/mp4" />
@@ -255,7 +381,7 @@ function CourseDetail() {
                 />
                 <Input
                   label="Image URL"
-                  name="img"
+                  name="image"
                   fullWidth
                   value={editableCourse?.image}
                   onChange={handleEditChange}
@@ -270,7 +396,79 @@ function CourseDetail() {
               </ModalBody>
               <ModalFooter>
                 <Button onPress={onClose}>Cancel</Button>
-                <Button onPress={handleSave}>Save</Button>
+                <Button
+                  color="primary"
+                  isDisabled={isSavingCourse}
+                  onPress={() => {
+                    handleSave();
+                    onClose();
+                  }}
+                >
+                  {isSavingCourse ? "Saving..." : "Save"}
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+
+      {/* Edit Video Modal */}
+      <Modal isOpen={isEditVideoModalOpen} onOpenChange={onEditVideoModalOpenChange}>
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>
+                <h3 className="text-xl font-bold">Edit Video</h3>
+              </ModalHeader>
+              <ModalBody>
+                <Input
+                  label="Video title"
+                  fullWidth
+                  value={editingVideoName}
+                  onChange={(e) => setEditingVideoName(e.target.value)}
+                />
+              </ModalBody>
+              <ModalFooter>
+                <Button onPress={onClose}>Cancel</Button>
+                <Button
+                  color="primary"
+                  onPress={() => {
+                    handleSaveVideoEdit();
+                    onClose();
+                  }}
+                >
+                  Save
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+
+      {/* Delete Video Confirmation Modal */}
+      <Modal isOpen={isDeleteVideoModalOpen} onOpenChange={onDeleteVideoModalOpenChange}>
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader>Confirm Deletion</ModalHeader>
+              <ModalBody>
+                <p>
+                  Are you sure you want to delete{" "}
+                  <span className="font-semibold">{videoToDelete?.name}</span>
+                  ? This action cannot be undone.
+                </p>
+              </ModalBody>
+              <ModalFooter>
+                <Button onPress={onClose}>Cancel</Button>
+                <Button
+                  color="danger"
+                  onPress={() => {
+                    handleConfirmDeleteVideo();
+                    onClose();
+                  }}
+                >
+                  Delete
+                </Button>
               </ModalFooter>
             </>
           )}

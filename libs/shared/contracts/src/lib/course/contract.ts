@@ -6,6 +6,8 @@ import {
   getAllCoursesSchema,
   getAllVideosOfCourseSchema,
   getCourseByIdSchema,
+  updateCourseSchema,
+  updateVideoInCourseSchema,
 } from "./schema";
 import { z } from "zod";
 
@@ -49,6 +51,30 @@ export const courseContract = c.router({
     },
     summary: "Get all courses",
   },
+  updateCourse: {
+    method: "PATCH",
+    path: "/course/:id",
+    pathParams: z.object({ id: z.string() }),
+    body: updateCourseSchema,
+    responses: {
+      200: SuccessSchema,
+      404: ErrorSchema,
+      500: ErrorSchema,
+    },
+    summary: "Update a course",
+  },
+  deleteCourse: {
+    method: "DELETE",
+    path: "/course/:id",
+    pathParams: z.object({ id: z.string() }),
+    body: z.object({}).optional(),
+    responses: {
+      200: SuccessSchema,
+      404: ErrorSchema,
+      500: ErrorSchema,
+    },
+    summary: "Delete a course",
+  },
   createVideoInCourse: {
     method: "POST",
     path: "/course/createVideoInCourse/:courseId",
@@ -71,5 +97,29 @@ export const courseContract = c.router({
       500: ErrorSchema,
     },
     summary: "Get all courses",
+  },
+  updateVideoInCourse: {
+    method: "PATCH",
+    path: "/course/updateVideoInCourse/:videoId",
+    pathParams: z.object({ videoId: z.string() }),
+    body: updateVideoInCourseSchema,
+    responses: {
+      200: SuccessSchema,
+      404: ErrorSchema,
+      500: ErrorSchema,
+    },
+    summary: "Update a video of a course",
+  },
+  deleteVideoInCourse: {
+    method: "DELETE",
+    path: "/course/deleteVideoInCourse/:videoId",
+    pathParams: z.object({ videoId: z.string() }),
+    body: z.object({}).optional(),
+    responses: {
+      200: SuccessSchema,
+      404: ErrorSchema,
+      500: ErrorSchema,
+    },
+    summary: "Delete a video of a course",
   },
 });

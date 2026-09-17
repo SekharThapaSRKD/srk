@@ -47,3 +47,14 @@ export const createVideoInCourseSchema = z.object({
   thumbnailUrl: z.string().optional(),
   duration: z.number(),
 });
+
+export const updateCourseSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  image: z.string().optional(),
+  package: z.string().array().optional(),
+});
+
+export const updateVideoInCourseSchema = z.object({
+  name: z.string(),
+});

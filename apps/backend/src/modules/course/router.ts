@@ -6,7 +6,11 @@ const s = initServer();
 
 export const courseRouter = s.router(courseContract, {
   createCourse: courseMutationHandler.createCourse,
+  updateCourse: courseMutationHandler.updateCourse,
+  deleteCourse: courseMutationHandler.deleteCourse,
   createVideoInCourse: courseMutationHandler.createVideoInCourse,
+  updateVideoInCourse: courseMutationHandler.updateVideoInCourse,
+  deleteVideoInCourse: courseMutationHandler.deleteVideoInCourse,
   getAllCourses: courseQueryHandler.getAllCourses,
   getVideosOfCourse: courseQueryHandler.getVideosOfCourse,
   getCourseById: courseQueryHandler.getCourseById,

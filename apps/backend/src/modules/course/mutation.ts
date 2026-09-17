@@ -63,7 +63,118 @@ const createVideoInCourse: AppRouteImplementationOrOptions<
   };
 };
 
+const updateCourse: AppRouteImplementationOrOptions<
+  typeof courseContract.updateCourse
+> = async ({ params, body }) => {
+  const courseExist = await CourseModel.findById(params.id);
+
+  if (!courseExist) {
+    return {
+      status: 404,
+      body: {
+        success: false,
+        message: 'Course not found',
+      },
+    };
+  }
+
+  await CourseModel.findByIdAndUpdate(params.id, body);
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Course updated successfully',
+    },
+  };
+};
+
+const deleteCourse: AppRouteImplementationOrOptions<
+  typeof courseContract.deleteCourse
+> = async ({ params }) => {
+  const courseExist = await CourseModel.findById(params.id);
+
+  if (!courseExist) {
+    return {
+      status: 404,
+      body: {
+        success: false,
+        message: 'Course not found',
+      },
+    };
+  }
+
+  await CourseModel.findByIdAndDelete(params.id);
+  await CourseVideoModel.deleteMany({ courseId: params.id });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Course deleted successfully',
+    },
+  };
+};
+
+const updateVideoInCourse: AppRouteImplementationOrOptions<
+  typeof courseContract.updateVideoInCourse
+> = async ({ params, body }) => {
+  const videoExist = await CourseVideoModel.findById(params.videoId);
+
+  if (!videoExist) {
+    return {
+      status: 404,
+      body: {
+        success: false,
+        message: 'Video not found',
+      },
+    };
+  }
+
+  await CourseVideoModel.findByIdAndUpdate(params.videoId, {
+    name: body.name,
+  });
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Video updated successfully',
+    },
+  };
+};
+
+const deleteVideoInCourse: AppRouteImplementationOrOptions<
+  typeof courseContract.deleteVideoInCourse
+> = async ({ params }) => {
+  const videoExist = await CourseVideoModel.findById(params.videoId);
+
+  if (!videoExist) {
+    return {
+      status: 404,
+      body: {
+        success: false,
+        message: 'Video not found',
+      },
+    };
+  }
+
+  await CourseVideoModel.findByIdAndDelete(params.videoId);
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Video deleted successfully',
+    },
+  };
+};
+
 export const courseMutationHandler = {
   createCourse,
+  updateCourse,
+  deleteCourse,
   createVideoInCourse,
+  updateVideoInCourse,
+  deleteVideoInCourse,
 };

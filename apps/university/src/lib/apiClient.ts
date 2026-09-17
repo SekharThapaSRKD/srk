@@ -222,6 +222,20 @@ export const createCourseApi = async (data: TCreateCoursePayload) => {
   const response = await apiClient.post('/course/create', data);
   return response.data;
 };
+
+type TUpdateCoursePayload = Partial<TCreateCoursePayload>;
+export const updateCourseApi = async (
+  courseId: string,
+  data: TUpdateCoursePayload
+) => {
+  const response = await apiClient.patch(`/course/${courseId}`, data);
+  return response.data;
+};
+
+export const deleteCourseApi = async (courseId: string) => {
+  const response = await apiClient.delete(`/course/${courseId}`);
+  return response.data;
+};
 // course video
 
 export const getCourseVideoByCourseId = async (courseId: string) => {
@@ -480,6 +494,21 @@ export const uploadVideoApi = async (data: TUploadVideoPayload) => {
   const response = await apiClient.post(
     `/course/createVideoInCourse/${data.courseId}`,
     data
+  );
+  return response.data;
+};
+
+export const updateCourseVideoApi = async (videoId: string, name: string) => {
+  const response = await apiClient.patch(
+    `/course/updateVideoInCourse/${videoId}`,
+    { name }
+  );
+  return response.data;
+};
+
+export const deleteCourseVideoApi = async (videoId: string) => {
+  const response = await apiClient.delete(
+    `/course/deleteVideoInCourse/${videoId}`
   );
   return response.data;
 };
