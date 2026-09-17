@@ -72,6 +72,28 @@ export async function deleteFileFromR2(key: string): Promise<void> {
 }
 
 /**
+ * Extract the R2 object key from either a bare key or a full R2/CDN URL,
+ * so callers can pass whatever is stored in the DB (legacy rows sometimes
+ * hold a full URL, newer ones a bare key) straight to deleteFileFromR2.
+ * @param value - A bare R2 key or a full URL pointing at an R2 object
+ * @returns The bare R2 object key
+ */
+export function extractR2Key(value: string): string {
+  if (!value) return '';
+
+  if (/^https?:\/\//i.test(value)) {
+    const url = new URL(value);
+    let path = url.pathname.replace(/^\/+/, '');
+    if (path.startsWith(`${R2_BUCKET}/`)) {
+      path = path.slice(R2_BUCKET.length + 1);
+    }
+    return path;
+  }
+
+  return value.replace(/^\/+/, '');
+}
+
+/**
  * Get the full CDN URL for an R2 object
  * @param key - The R2 object key (path)
  * @returns The full CDN URL

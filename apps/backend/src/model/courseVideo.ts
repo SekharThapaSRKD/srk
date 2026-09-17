@@ -1,5 +1,17 @@
 import mongoose from "mongoose";
 
+export interface ICourseVideo extends mongoose.Document {
+  name: string;
+  courseId: mongoose.Types.ObjectId;
+  videoUrl: string;
+  originalVideoUrl?: string;
+  videoRenditions?: { quality: string; url: string }[];
+  thumbnailUrl?: string;
+  duration: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const courseVideoSchema = new mongoose.Schema(
   {
     name: {
@@ -45,7 +57,7 @@ const courseVideoSchema = new mongoose.Schema(
   }
 );
 
-export const CourseVideoModel = mongoose.model(
+export const CourseVideoModel = mongoose.model<ICourseVideo>(
   "CourseVideo",
   courseVideoSchema
 );

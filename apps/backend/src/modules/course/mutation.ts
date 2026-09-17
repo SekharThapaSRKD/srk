@@ -1,7 +1,31 @@
 import { AppRouteImplementationOrOptions } from '@ts-rest/express/src/lib/types';
 import { courseContract } from '@srk/shared/contracts';
 import { CourseModel } from '../../model/courseModel';
-import { CourseVideoModel } from '../../model/courseVideo';
+import { CourseVideoModel, ICourseVideo } from '../../model/courseVideo';
+import { deleteFileFromR2, extractR2Key } from '../../services/r2Service';
+
+// Deletes every R2 object tied to a course video (main file, original
+// pre-compression source, all quality renditions, thumbnail). Failures are
+// logged but never thrown - an orphaned R2 object is preferable to blocking
+// the DB delete the user actually asked for.
+async function deleteCourseVideoR2Files(video: ICourseVideo): Promise<void> {
+  const keys = [
+    video.videoUrl,
+    video.originalVideoUrl,
+    video.thumbnailUrl,
+    ...(video.videoRenditions?.map((r) => r.url) ?? []),
+  ].filter((value): value is string => !!value);
+
+  await Promise.all(
+    keys.map(async (value) => {
+      try {
+        await deleteFileFromR2(extractR2Key(value));
+      } catch (error) {
+        console.error(`Failed to delete R2 object for course video ${video._id}:`, error);
+      }
+    })
+  );
+}
 
 const createCourse: AppRouteImplementationOrOptions<
   typeof courseContract.createCourse
@@ -104,6 +128,9 @@ const deleteCourse: AppRouteImplementationOrOptions<
     };
   }
 
+  const courseVideos = await CourseVideoModel.find({ courseId: params.id });
+  await Promise.all(courseVideos.map((video) => deleteCourseVideoR2Files(video)));
+
   await CourseModel.findByIdAndDelete(params.id);
   await CourseVideoModel.deleteMany({ courseId: params.id });
 
@@ -159,6 +186,7 @@ const deleteVideoInCourse: AppRouteImplementationOrOptions<
     };
   }
 
+  await deleteCourseVideoR2Files(videoExist);
   await CourseVideoModel.findByIdAndDelete(params.videoId);
 
   return {
