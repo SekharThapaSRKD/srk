@@ -115,6 +115,7 @@
   "dependencies": {
     "@auth0/auth0-react": "^2.9.0",
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/lib-storage": "^3.1134.0",
     "@heroui/react": "^2.8.5",
     "@hookform/resolvers": "^3.10.0",
     "@nextui-org/navbar": "^2.2.8",

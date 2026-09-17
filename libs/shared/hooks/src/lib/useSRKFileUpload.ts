@@ -1,6 +1,7 @@
 // import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 // import { storage } from '@srk/shared/firebase';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { v4 as uuidv4 } from 'uuid';
 import { useState, useRef, useCallback } from 'react';
 import { env as sharedEnv } from '@srk/shared/firebase';
@@ -137,19 +138,58 @@ export const useSRKFileUpload = (appName: string) => {
       const envPrefix = sharedEnv.isProdFlag ? 'srk' : 'dev';
       const key = `${envPrefix}/${appName}/${keyPrefix}/${uniqueFileName}`;
 
-      // Convert File/Blob to ArrayBuffer
-      const arrayBuffer = await fileToUpload.arrayBuffer();
       const params = {
         Bucket: R2_BUCKET,
         Key: key,
-        Body: new Uint8Array(arrayBuffer),
+        Body: fileToUpload,
         ContentType: fileToUpload.type,
       };
 
-      // S3 upload (no progress events in browser, so just set 100% after upload).
+      setUploadProgress((prev) => ({
+        ...prev,
+        [uploadId]: {
+          progress: 0,
+          fileName: file.name,
+          status: 'uploading',
+          lastProgressTime: Date.now(),
+        },
+      }));
+      if (onProgress) onProgress(0);
+
+      // Multipart upload via @aws-sdk/lib-storage emits real httpUploadProgress
+      // events as each part completes, unlike a plain PutObjectCommand which
+      // only resolves once the entire body has been sent (no progress in between).
       // Retries a couple times on transient failures (e.g. mobile network drops)
       // before giving up, since a single blip used to kill the whole flow.
-      await withRetry(() => s3Client.send(new PutObjectCommand(params)));
+      await withRetry(async () => {
+        const upload = new Upload({
+          client: s3Client,
+          params,
+          queueSize: 4,
+          partSize: 5 * 1024 * 1024,
+        });
+
+        upload.on('httpUploadProgress', (event) => {
+          const loaded = event.loaded ?? 0;
+          const total = event.total ?? fileToUpload.size;
+          // Cap at 99 so the 100% state below only appears once the upload
+          // has actually been confirmed complete by upload.done().
+          const percent =
+            total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0;
+          setUploadProgress((prev) => ({
+            ...prev,
+            [uploadId]: {
+              progress: percent,
+              fileName: file.name,
+              status: 'uploading',
+              lastProgressTime: Date.now(),
+            },
+          }));
+          if (onProgress) onProgress(percent);
+        });
+
+        await upload.done();
+      });
       const url = `${R2_ENDPOINT}/${R2_BUCKET}/${key}`;
 
       setUploadProgress((prev) => ({

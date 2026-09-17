@@ -7,6 +7,7 @@ import {
   Card,
   CardHeader,
   CardBody,
+  Progress,
 } from "@nextui-org/react";
 import {
   Modal,
@@ -51,7 +52,7 @@ function CourseDetail() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [editableCourse, setEditableCourse] = useState<TCourse | null>(null);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
-  const { uploadFile } = useSRKFileUpload('university');
+  const { uploadFile, isUploading } = useSRKFileUpload('university');
   const { show } = useAlert();
   console.log("chapters", chapters);
 
@@ -89,7 +90,7 @@ function CourseDetail() {
     },
     enabled: !!course?._id,
   });
-  const { mutate: uploadVideoMutation } = useMutation({
+  const { mutate: uploadVideoMutation, isPending: isRegisteringVideo } = useMutation({
     mutationKey: ["uploadVideo"],
     mutationFn: async (data: TUploadVideoPayload) => {
       const res = await uploadVideoApi(data);
@@ -260,6 +261,8 @@ function CourseDetail() {
     deleteVideoMutation(videoToDelete._id);
   };
 
+  const isSubmittingVideo = isUploading || isRegisteringVideo;
+
   if (!course) {
     return <div></div>;
   }
@@ -295,6 +298,7 @@ function CourseDetail() {
                 labelPlacement="outside"
                 value={chapterName}
                 onChange={(e) => setChapterName(e.target.value)}
+                isDisabled={isSubmittingVideo}
                 required
               />
             </div>
@@ -308,17 +312,44 @@ function CourseDetail() {
                 type="file"
                 accept="video/*"
                 onChange={handleFileChange}
-                className="w-full px-3 py-2 border rounded-md"
+                disabled={isSubmittingVideo}
+                className="w-full px-3 py-2 border rounded-md disabled:opacity-50"
                 required
               />
             </div>
+
+            {isSubmittingVideo && (
+              <div className="space-y-2 bg-default-100 p-4 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">
+                    {isUploading
+                      ? "Uploading video..."
+                      : "Finalizing upload..."}
+                  </span>
+                  <span className="text-sm text-primary font-bold">
+                    {progress}%
+                  </span>
+                </div>
+                <Progress
+                  value={progress}
+                  className="w-full"
+                  color="primary"
+                  aria-label="Video upload progress"
+                />
+              </div>
+            )}
+
             <Button
               color="primary"
               type="submit"
-              disabled={progress > 0}
+              isDisabled={isSubmittingVideo}
               className="w-full  text-white font-bold py-2 px-4 rounded"
             >
-              {progress > 0 ? `${progress}% Uploading` : "Upload video"}
+              {isUploading
+                ? `${progress}% Uploading`
+                : isRegisteringVideo
+                ? "Finalizing..."
+                : "Upload video"}
             </Button>
           </form>
         </CardBody>
