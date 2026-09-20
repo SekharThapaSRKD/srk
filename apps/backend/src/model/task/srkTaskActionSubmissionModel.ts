@@ -44,6 +44,16 @@ const srkTaskActionSubmissionSchema = new mongoose.Schema(
   }
 );
 
+// Every task-app request filters by user and/or status; without these the
+// collection (growing ~10k docs/day) is scanned in full on each call.
+srkTaskActionSubmissionSchema.index({
+  taskUserId: 1,
+  status: 1,
+  createdAt: -1,
+});
+srkTaskActionSubmissionSchema.index({ taskUserId: 1, growPackageTodoId: 1 });
+srkTaskActionSubmissionSchema.index({ status: 1, createdAt: -1 });
+
 export const srkTaskActionSubmissionModel = mongoose.model(
   'srkTaskActionSubmission',
   srkTaskActionSubmissionSchema

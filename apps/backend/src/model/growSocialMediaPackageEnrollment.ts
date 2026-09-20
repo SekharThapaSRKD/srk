@@ -69,6 +69,12 @@ const growSocialMediaPackageEnrollmentSchema =
     }
   );
 
+growSocialMediaPackageEnrollmentSchema.index({
+  isActive: 1,
+  type: 1,
+  socialMediaPlatform: 1,
+});
+
 export const growSocialMediaPackageEnrollmentModel = mongoose.model(
   'growSocialMediaPackageEnrollment',
   growSocialMediaPackageEnrollmentSchema

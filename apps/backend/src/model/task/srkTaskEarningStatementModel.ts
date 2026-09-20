@@ -36,6 +36,8 @@ const srkTaskEarningStatementSchema = new mongoose.Schema(
   }
 );
 
+srkTaskEarningStatementSchema.index({ taskUserId: 1, createdAt: -1 });
+
 export const srkTaskEarningStatementModel = mongoose.model(
   'srkTaskEarningStatement',
   srkTaskEarningStatementSchema

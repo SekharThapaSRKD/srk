@@ -28,6 +28,8 @@ const srkTaskUserBalanceSchema = new mongoose.Schema(
   }
 );
 
+srkTaskUserBalanceSchema.index({ taskUserId: 1 });
+
 export const srkTaskUserBalanceModel = mongoose.model(
   'srkTaskUserBalance',
   srkTaskUserBalanceSchema

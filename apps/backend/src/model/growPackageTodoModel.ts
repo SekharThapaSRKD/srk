@@ -38,6 +38,8 @@ const growPackageTodoSchema = new mongoose.Schema(
   }
 );
 
+growPackageTodoSchema.index({ growSocialMediaPackageEnrollmentId: 1 });
+
 export const growPackageTodoModel = mongoose.model(
   'growPackageTodo',
   growPackageTodoSchema

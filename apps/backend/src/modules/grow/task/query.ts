@@ -1429,25 +1429,27 @@ const getSrkTaskActionsByPlatforms: AppRouteImplementationOrOptions<
       queryFilter['type'] = type;
     }
 
-    const growPackageEnrollments =
-      await growSocialMediaPackageEnrollmentModel.find({
-        isActive: true,
-        type,
-        socialMediaPlatform: platform,
-      });
+    // Only the ids are needed, so skip full document hydration; the user's
+    // submitted todos are independent of the enrollments, so fetch both at once.
+    const [growPackageEnrollments, submittedTodoIds] = await Promise.all([
+      growSocialMediaPackageEnrollmentModel
+        .find({
+          isActive: true,
+          type,
+          socialMediaPlatform: platform,
+        })
+        .select('_id')
+        .lean(),
+      srkTaskUserId
+        ? srkTaskActionSubmissionModel
+            .find({ taskUserId: new mongoose.Types.ObjectId(srkTaskUserId) })
+            .select('growPackageTodoId')
+            .lean()
+            .then((submissions) => submissions.map((s) => s.growPackageTodoId))
+        : Promise.resolve([] as any[]),
+    ]);
 
     const enrollmentIds = growPackageEnrollments.map((e) => e._id);
-
-    // Get todos that have already been submitted by the user
-    let submittedTodoIds: any[] = [];
-    if (srkTaskUserId) {
-      const taskUserId = new mongoose.Types.ObjectId(srkTaskUserId);
-      const submissions = await srkTaskActionSubmissionModel
-        .find({ taskUserId })
-        .select('growPackageTodoId')
-        .lean();
-      submittedTodoIds = submissions.map((s) => s.growPackageTodoId);
-    }
 
     // Build filter to exclude already submitted todos
     const todoFilter: any = {
@@ -1457,21 +1459,25 @@ const getSrkTaskActionsByPlatforms: AppRouteImplementationOrOptions<
       todoFilter._id = { $nin: submittedTodoIds };
     }
 
-    const srkTaskTodos = await growPackageTodoModel
-      .find(todoFilter)
-      .populate<{
-        growSocialMediaPackageEnrollmentId: {
-          growSocialMediaPackageUserId: { fullName: string };
-        };
-      }>({
-        path: 'growSocialMediaPackageEnrollmentId',
-        populate: { path: 'growSocialMediaPackageUserId', select: 'fullName' },
-      })
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    const totalSrkTodos = await growPackageTodoModel.countDocuments(todoFilter);
+    const [srkTaskTodos, totalSrkTodos] = await Promise.all([
+      growPackageTodoModel
+        .find(todoFilter)
+        .populate<{
+          growSocialMediaPackageEnrollmentId: {
+            growSocialMediaPackageUserId: { fullName: string };
+          };
+        }>({
+          path: 'growSocialMediaPackageEnrollmentId',
+          populate: {
+            path: 'growSocialMediaPackageUserId',
+            select: 'fullName',
+          },
+        })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      growPackageTodoModel.countDocuments(todoFilter),
+    ]);
 
     return {
       status: 200,
