@@ -10,10 +10,13 @@ import ssoRouter from './modules/sso/router';
 import { apiContract } from '@srk/shared/contracts';
 import { JwtAuthMiddleware } from './utils/middleware';
 import { env } from './config/env';
+import { slowRequestLogger } from './utils/perfMonitor';
 
 export const app = express();
 
 app.set('trust proxy', 1);
+
+app.use(slowRequestLogger);
 
 // Increase body size limits to allow base64 image uploads from the frontend
 app.use(express.json({ limit: '150mb' }));
@@ -51,6 +54,9 @@ app.use(
       }
     },
     credentials: true, // Allow cookies to be sent
+    // Let browsers cache preflight results for an hour instead of sending an
+    // OPTIONS request before nearly every POST (~11k/day on the task app).
+    maxAge: 3600,
   })
 );
 

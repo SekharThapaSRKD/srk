@@ -3,6 +3,7 @@ dotenv.config();
 import { app } from "./app";
 import connectDB from "./config/database";
 import { env, validateEnv } from "./config/env";
+import { startEventLoopMonitor } from "./utils/perfMonitor";
 
 
 async function startServer() {
@@ -34,6 +35,7 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[SERVER] ✓ Server running on http://0.0.0.0:${PORT}`);
     console.log(`[SERVER] ✓ Health check available at http://0.0.0.0:${PORT}/health`);
+    startEventLoopMonitor();
   });
 
   // Handle unhandled rejections
