@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Send, Upload, X } from 'lucide-react';
 import { allPlatforms } from '../../../../data/dummyDashboardMockData';
 import { DashboardGlassCard } from '../ui/DashboardGlassCard';
@@ -30,6 +31,32 @@ export const VerificationUploadModal: React.FC<
   const activeUploads: any[] = [];
   const { taskUserID } = useTaskAuthStore();
   const submitAction = api.srkTask.srkTaskActionSubmission.useMutation();
+  const queryClient = useQueryClient();
+
+  // The task list is cached per platform/type; drop the submitted task from every
+  // cached list so reopening the list can never show it again, even if the
+  // background refetch is slow, then refetch to resync totals.
+  const removeTaskFromCachedLists = () => {
+    queryClient.setQueriesData(
+      { queryKey: ['getSrkTaskActionsByPlatforms'] },
+      (old: any) =>
+        old?.status === 200 && Array.isArray(old.body?.data)
+          ? {
+              ...old,
+              body: {
+                ...old.body,
+                data: old.body.data.filter(
+                  (item: any) => item?.actionId !== task.id
+                ),
+                totalRecords: Math.max(0, (old.body.totalRecords ?? 1) - 1),
+              },
+            }
+          : old
+    );
+    queryClient.invalidateQueries({
+      queryKey: ['getSrkTaskActionsByPlatforms'],
+    });
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -78,6 +105,7 @@ export const VerificationUploadModal: React.FC<
         {
           onSuccess: () => {
             setIsUploading(false);
+            removeTaskFromCachedLists();
             completeTask(task.id);
             addNotification(`✅ Proof submitted for ${task.type} task`, 'success');
             setTimeout(() => onClose(), 1500);
@@ -85,6 +113,18 @@ export const VerificationUploadModal: React.FC<
           onError: (error: any) => {
             setIsUploading(false);
             const errorMsg = error?.body?.message || 'Unknown error';
+            // The server already has this submission (e.g. the list was stale, or
+            // an earlier attempt succeeded but the response was lost). Not an
+            // error for the user: remove the task and close instead of a red error.
+            if (/already submitted/i.test(errorMsg)) {
+              removeTaskFromCachedLists();
+              addNotification(
+                'You have already submitted this task. It has been removed from your list.',
+                'info'
+              );
+              setTimeout(() => onClose(), 1000);
+              return;
+            }
             setUploadError(errorMsg);
             addNotification(`Submission failed: ${errorMsg}`, 'error');
           },
