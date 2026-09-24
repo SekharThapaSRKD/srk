@@ -11,6 +11,7 @@ const isDataUrl = (value: unknown): value is string =>
 export interface FieldMapping {
   folder: string;
   prefix: string;
+  compress?: boolean;
 }
 
 /**
@@ -57,7 +58,8 @@ export const createDataUrlUploadMiddleware = (
           const r2Key = await uploadImageDataUrlToR2(
             value,
             mapping.folder,
-            mapping.prefix
+            mapping.prefix,
+            mapping.compress ? { compress: true } : undefined
           );
           req.body[key] = r2Key;
           uploadedR2Keys.push(r2Key);

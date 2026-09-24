@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import convert from 'heic-convert';
+import sharp from 'sharp';
 import { deleteFileFromR2, uploadFileToR2 } from './r2Service';
 import { env } from '../config/env';
 
@@ -74,10 +75,22 @@ export const parseImageDataUrl = async (dataUrl: string) => {
 export const uploadImageDataUrlToR2 = async (
   dataUrl: string,
   folder: string,
-  filePrefix: string
+  filePrefix: string,
+  options: { compress?: boolean } = {}
 ) => {
   const rootFolder = env.R2_PREFIX_FOLDER;
-  const { buffer, contentType, extension } = await parseImageDataUrl(dataUrl);
+  let { buffer, contentType, extension } = await parseImageDataUrl(dataUrl);
+
+  if (options.compress) {
+    buffer = await sharp(buffer)
+      .rotate()
+      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+    contentType = 'image/jpeg';
+    extension = 'jpg';
+  }
+
   const fileName = `${filePrefix}-${Date.now()}-${randomUUID()}.${extension}`;
   // Log the effective target (prefix + folder) so runtime shows srk/dev clearly
   console.log(`[R2] Upload target: ${rootFolder}/${folder}/${fileName}`);

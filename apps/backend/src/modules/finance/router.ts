@@ -8,12 +8,12 @@ const s = initServer();
 
 // KYC field mappings for image upload middleware
 const kycFieldMappings = {
-  frontImage: { folder: 'university/kyc', prefix: 'university-kyc-front' },
-  backImage: { folder: 'university/kyc', prefix: 'university-kyc-back' },
-  verificationImage: { folder: 'university/kyc', prefix: 'university-kyc-verification' },
-  leftThumbFingerprint: { folder: 'university/kyc', prefix: 'university-kyc-left-thumb' },
-  rightThumbFingerprint: { folder: 'university/kyc', prefix: 'university-kyc-right-thumb' },
-  signature: { folder: 'university/kyc', prefix: 'university-kyc-signature' },
+  frontImage: { folder: 'university/kyc', prefix: 'university-kyc-front', compress: true },
+  backImage: { folder: 'university/kyc', prefix: 'university-kyc-back', compress: true },
+  verificationImage: { folder: 'university/kyc', prefix: 'university-kyc-verification', compress: true },
+  leftThumbFingerprint: { folder: 'university/kyc', prefix: 'university-kyc-left-thumb', compress: true },
+  rightThumbFingerprint: { folder: 'university/kyc', prefix: 'university-kyc-right-thumb', compress: true },
+  signature: { folder: 'university/kyc', prefix: 'university-kyc-signature', compress: true },
 };
 
 export const financeRouter = s.router(financeContract, {
